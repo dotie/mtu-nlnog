@@ -1,0 +1,65 @@
+#!/usr/bin/python3
+
+import ipaddress
+import json
+import requests
+import subprocess
+import urllib.request
+
+# Slack
+slack_channels = ['']
+slack_token = ""
+
+# Initialise stuff
+slacktext = ""
+activenodes = []
+failed64 = []
+failed1500 = []
+
+# Ignore OVH VAC etc
+ignorelist = ['109.247.116.75', '37.187.50.166', '5.196.13.221', '192.99.153.129']
+
+# NLNOG Ring Active Ring Nodes
+with urllib.request.urlopen("https://ring.nlnog.net/api/1.0/nodes/active") as url:
+    data = json.loads(url.read().decode())
+
+for item in data['results']['nodes']:
+    try:
+        if (ipaddress.IPv4Address(item['ipv4'])) and (item['ipv4'] not in ignorelist):
+            activenodes.append(item['ipv4'])
+    except:
+        continue
+
+print("Checking MTU of %s nodes..." % (len(activenodes)))
+
+# MTU Check
+for node in activenodes:
+    try:
+        subprocess.check_call('fping -q ' + node, shell=True)
+    except subprocess.CalledProcessError:
+        failed64.append(node)
+    try:
+        subprocess.check_call('fping -q -b 1472 -M do ' + node, shell=True)
+    except subprocess.CalledProcessError:
+        failed1500.append(node)
+
+# Ignore nodes that aren't reachable at all:
+failedmtu = list(set(failed1500).difference(failed64))
+
+# Slack
+if failedmtu:
+    print("Nodes failed MTU test")
+    for node in failedmtu:
+        slacktext += ("%s\n" % (node))
+    # Slack:
+    slack_payload = {
+        "title": "Nlnog Ring MTU Tester",
+        "content": slacktext,
+        "token": slack_token,
+        "channels": slack_channels,
+        "initial_comment": "The following IPs have failed the 1500 byte MTU Check:"
+    }
+    r = requests.post("https://slack.com/api/files.upload", params=slack_payload)
+    print(r)
+else:
+    print("All nodes reachable with 1500 byte MTU!")
